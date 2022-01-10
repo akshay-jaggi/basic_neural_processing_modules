@@ -1,5 +1,4 @@
 .idea/
 
 *.pyc
-__pycache__/classification.cpython-38.pyc
-__pycache__/cross_validation.cpython-38.pyc
+__pycache__/
