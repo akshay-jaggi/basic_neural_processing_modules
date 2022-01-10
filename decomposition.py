@@ -357,7 +357,7 @@ def incremental_pca(dataloader,
     if method == 'sklearn':
         ipca = sklearn.decomposition.IncrementalPCA(**method_kwargs)
     elif method == 'cuml':
-        ipca =    cuml.decomposition.IncrementalPCA(**method_kwargs)
+        ipca = cuml.decomposition.IncrementalPCA(**method_kwargs)
     
     for iter_batch, batch in enumerate(tqdm(dataloader)):
         if method == 'sklearn':
