@@ -1,8 +1,8 @@
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-import pycuda
-import pycuda.driver as drv
+#import pycuda
+#import pycuda.driver as drv
 
 import sys
 import gc

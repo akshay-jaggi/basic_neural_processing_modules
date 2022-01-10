@@ -13,7 +13,7 @@ Functions and Interdependencies:
 import numpy as np
 import scipy.signal
 import matplotlib.pyplot as plt
-from ScanImageTiffReader import ScanImageTiffReader
+#from ScanImageTiffReader import ScanImageTiffReader
 
 from varname import nameof
 

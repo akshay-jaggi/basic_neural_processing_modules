@@ -1,4 +1,4 @@
-import cupy
+#import cupy
 
 def set_device(device_num=0, verbose=True):
     """
