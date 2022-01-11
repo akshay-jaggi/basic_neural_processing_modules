@@ -1,3 +1,5 @@
+import os
+
 import sklearn.decomposition
 import scipy.stats
 import numpy as np
@@ -14,6 +16,8 @@ import gc
 
 from tqdm.notebook import tqdm
 
+import decord
+from decord import VideoReader, VideoLoader, cpu
 ###########################
 ########## PCA ############
 ###########################
@@ -181,12 +185,13 @@ def unmix_pcs(pca_components, weight_vecs):
 ########## Incremental PCA ############
 #######################################
 
-class ipca_dataset(Dataset):
+class IPCADataset(Dataset):
     """
     see incremental_pca for demo
     """
     def __init__(self, 
-                 X, 
+                 X,
+                 motion = False,
                  mean_sub=True,
                  zscore=False,
                  preprocess_sample_method='random',
@@ -201,6 +206,8 @@ class ipca_dataset(Dataset):
             X (torch.Tensor or np.array):
                 Data to make dataset from.
                 2-D array. Columns are features, rows are samples.
+            motion (bool):
+                whether to compute motion energy
             mean_sub (bool):
                 Whether or not to mean subtract ('center') the
                  columns.
@@ -218,28 +225,33 @@ class ipca_dataset(Dataset):
             dtype (torch.dtype):
                 Data type to use.
         """
-        # Upgrade here for using an on the fly dataset.
-        self.X = torch.as_tensor(X, dtype=dtype, device=device) # first (0th) dim will be subsampled from
-        
-        self.n_samples = self.X.shape[0]
+        pathlike = str or os.PathLike
+        if X is pathlike:
+            decord.bridge.set_bridge('torch')
+            self.X = VideoReader(X, ctx=device(0))
+            self.n_samples = len(self.vr)
+        else:
+            self.X = torch.as_tensor(X, dtype=dtype, device=device) # first (0th) dim will be subsampled from
+            self.n_samples = self.X.shape[0]
 
+        self.motion = motion
         self.mean_sub = mean_sub
         self.zscore = zscore
 
         if mean_sub or zscore:
             if preprocess_sample_method == 'random':
-                self.preprocess_inds = torch.randperm(preprocess_sample_num)[:preprocess_sample_num]
+                preprocess_inds = torch.randperm(self.n_samples)[:preprocess_sample_num]
             elif preprocess_sample_method == 'first':
-                self.preprocess_inds = torch.arange(preprocess_sample_num)
+                preprocess_inds = torch.arange(preprocess_sample_num)
             else:
                 raise ValueError('preprocess_sample_method must be "random" or "first"')
-            self.preprocess_inds = self.preprocess_inds.to(device)
+            preprocess_batch = self.X[preprocess_inds].reshape(preprocess_sample_num, -1).float()
 
-        # Upgrade here for using an on the fly dataset.
-        if mean_sub:
-            self.mean_vals = torch.mean(self.X[self.preprocess_inds,:], dim=0)
-        if zscore:
-            self.std_vals = torch.std(self.X[self.preprocess_inds,:], dim=0)
+            if motion:
+                preprocess_batch = torch.diff(preprocess_batch, dim=0, append=preprocess_batch[None, -1])
+            self.mean_vals = torch.mean(preprocess_batch, dim=0)
+            if zscore:
+                self.std_vals = torch.std(preprocess_batch, dim=0)
         
     def __len__(self):
         return self.n_samples
@@ -252,15 +264,94 @@ class ipca_dataset(Dataset):
             idx (int):
                 Index of sample to return.
         """
-        if self.mean_sub or self.zscore:
-            out = self.X[idx,:] - self.mean_vals
+        if self.motion:
+            if idx == self.n_samples - 1:
+                new_batch = self.X[idx:(idx+1)].reshape(1, -1).float()
+                new_batch = torch.diff(new_batch, dim=0, append=new_batch[None, -1])
+            else:
+                new_batch = self.X[idx:(idx+2)].reshape(2, -1).float()
+                new_batch = torch.diff(new_batch, dim=0)
         else:
-            out = self.X[idx,:]
+            new_batch = self.X[idx].reshape(1, -1).float()
+
+        if self.mean_sub or self.zscore:
+            out = new_batch - self.mean_vals
+        else:
+            out = new_batch
 
         if self.zscore:
             out = out / self.std_vals
-            
-        return out, idx
+
+        return out[0], idx
+
+
+class BatchedVideoLoader(object):
+    def __init__(self,
+                 video_filepath,
+                 batch_size=1,
+                 mean_sub=True,
+                 zscore=False,
+                 motion=False,
+                 preprocess_sample_method='random',
+                 preprocess_sample_num=100,
+                 device=cpu):
+
+        vr = VideoReader(video_filepath, ctx=device(0))
+
+        self.n_samples = len(vr)
+        self.image_shape = vr[0].shape
+        self.batch_size = batch_size + 1 if batch_size != self.n_samples else batch_size
+        self.motion = motion
+        self.mean_sub = mean_sub
+        self.zscore = zscore
+
+        if mean_sub or zscore:
+            if preprocess_sample_method == 'random':
+                preprocess_inds = torch.randperm(self.n_samples)[:preprocess_sample_num]
+            elif preprocess_sample_method == 'first':
+                preprocess_inds = torch.arange(preprocess_sample_num)
+            else:
+                raise ValueError('preprocess_sample_method must be "random" or "first"')
+            self.preprocess_batch = vr.get_batch(list(preprocess_inds)).reshape(preprocess_sample_num, -1).float()
+
+        if motion:
+            self.preprocess_batch = torch.diff(self.preprocess_batch, dim=0, append=self.preprocess_batch[None, -1])
+        if mean_sub:
+            self.mean_vals = torch.mean(self.preprocess_batch, dim=0)
+        if zscore:
+            self.std_vals = torch.std(self.preprocess_batch, dim=0)
+
+        self.vl = VideoLoader([video_filepath], ctx=device(0), shape=(self.batch_size, *self.image_shape), shuffle=0,
+                              interval=0, skip=0)
+        self.idx = 0
+
+    def __iter__(self):
+        return self
+
+    def __len__(self):
+        return len(self.vl)
+
+    def __next__(self):
+        new_batch = self.vl.next()[0].reshape(self.batch_size, -1).float()
+        if self.motion:
+            if self.batch_size == self.n_samples:
+                new_batch = torch.diff(new_batch, dim=0, append=new_batch[None,-1])
+            else:
+                new_batch = torch.diff(new_batch, dim=0)
+
+        if self.mean_sub or self.zscore:
+            out = new_batch - self.mean_vals
+        else:
+            out = new_batch
+
+        if self.zscore:
+            out = out / self.std_vals
+        self.idx += 1
+        return out, self.idx - 1
+
+    def reset(self):
+        self.vl.reset()
+        self.idx = 0
 
 def incremental_pca(dataloader,
                     method='sklearn',
