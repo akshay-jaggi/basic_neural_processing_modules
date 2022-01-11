@@ -225,11 +225,11 @@ class IPCADataset(Dataset):
             dtype (torch.dtype):
                 Data type to use.
         """
-        pathlike = str or os.PathLike
-        if X is pathlike:
+        pathlike_input = type(X) is str or type(X) is os.PathLike
+        if pathlike_input:
             decord.bridge.set_bridge('torch')
             self.X = VideoReader(X, ctx=device(0))
-            self.n_samples = len(self.vr)
+            self.n_samples = len(self.X)
         else:
             self.X = torch.as_tensor(X, dtype=dtype, device=device) # first (0th) dim will be subsampled from
             self.n_samples = self.X.shape[0]
@@ -245,7 +245,10 @@ class IPCADataset(Dataset):
                 preprocess_inds = torch.arange(preprocess_sample_num)
             else:
                 raise ValueError('preprocess_sample_method must be "random" or "first"')
-            preprocess_batch = self.X[preprocess_inds].reshape(preprocess_sample_num, -1).float()
+            if pathlike_input:
+                preprocess_batch = self.X.get_batch(preprocess_inds).reshape(preprocess_sample_num, -1).float()
+            else:
+                preprocess_batch = self.X[preprocess_inds]
 
             if motion:
                 preprocess_batch = torch.diff(preprocess_batch, dim=0, append=preprocess_batch[None, -1])
@@ -295,7 +298,7 @@ class BatchedVideoLoader(object):
                  preprocess_sample_method='random',
                  preprocess_sample_num=100,
                  device=cpu):
-
+        decord.bridge.set_bridge('torch')
         vr = VideoReader(video_filepath, ctx=device(0))
 
         self.n_samples = len(vr)
