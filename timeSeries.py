@@ -249,6 +249,7 @@ def rolling_percentile_rq(x_in, window, ptile=10, stride=1, center=True):
         return pipe.feed(x_in)[lag:]
     else:
         return pipe.feed(x_in)
+
 def rolling_percentile_rq_multicore(x_in, window, ptile, stride=1, center=True, n_workers=None):
     return multiprocessing_pool_along_axis(x_in, rolling_percentile_rq, n_workers=None, axis=0, **{'window': window , 'ptile': ptile, 'stride': stride, 'center': False} )
 
